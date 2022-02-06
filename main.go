@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"github.com/jackpal/gateway"
@@ -264,7 +265,7 @@ func GetDstMAC(
 	return mac, nil
 }
 
-// scan scans the dst IP address of this Scanner.
+// scan 对目标ip所有端口进行扫描
 func (s *Scanner) scan() error {
 	// First off, get the MAC address we should be sending packets to.
 	dstMAC, err := GetDstMAC(s.dstIP, s.gatewayIP, s.srcIP, s.deviceName, s.mac)
@@ -296,15 +297,14 @@ func (s *Scanner) scan() error {
 		log.Fatal(err)
 	}
 
-	ipFlow := gopacket.NewFlow(layers.EndpointIPv4, s.dstIP, s.srcIP)
-	// var failPort []layers.TCPPort
+	// 构建ip地址流 用于确定包流向
 	start := time.Now()
 	for {
 		// 从 1 到 65535 依次发包
-		if tcpLayer.DstPort < 6553 {
+		if tcpLayer.DstPort < 1000 {
 			start = time.Now()
 			tcpLayer.DstPort++
-			log.Print(tcpLayer.DstPort)
+			// log.Print(tcpLayer.DstPort)
 			if err := s.send(&ethLayer, &ip4Layer, &tcpLayer); err != nil {
 				log.Printf("fail to send to port %v: %v", tcpLayer.DstPort, err)
 			}
@@ -323,23 +323,29 @@ func (s *Scanner) scan() error {
 		// 阻塞以读取响应包
 		packetSource := gopacket.NewPacketSource(s.handle, s.handle.LinkType())
 		packet, _ := packetSource.NextPacket()
-		if net := packet.NetworkLayer(); net == nil {
+
+		if networkLayer := packet.NetworkLayer(); networkLayer == nil {
+			// 检查是否有网络层
 			log.Printf("packet has no network layer")
-		} else if net.NetworkFlow() != ipFlow {
-			log.Printf("packet does not match our ip src/dst")
-		} else if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer == nil {
-			log.Printf("packet has not tcp layer")
-		} else if tcp, ok := tcpLayer.(*layers.TCP); !ok {
-			// We panic here because this is guaranteed to never
-			// happen.
-			panic("tcp layer is not tcp layer :-/")
-		} else if tcp.DstPort != 54321 {
-			log.Printf("dst port %v does not match", tcp.DstPort)
-		} else if tcp.RST {
-			log.Printf("  port %v closed", tcp.SrcPort)
-		} else if tcp.SYN && tcp.ACK {
-			log.Printf("  port %v open", tcp.SrcPort)
-			s.openPort = append(s.openPort, tcp.SrcPort.String())
+		} else if ipl := packet.Layer(layers.LayerTypeIPv4); ipl == nil {
+			// 检查是否有ip层
+			log.Printf("packet has no IPv4 layer")
+		} else if tcpl := packet.Layer(layers.LayerTypeTCP); tcpl == nil {
+			// 检查是否有TCP层
+			log.Printf("packet has no TCP layer")
+		} else if recvIPLayer, _ := ipl.(*layers.IPv4); !bytes.Equal(recvIPLayer.SrcIP, s.dstIP) || !bytes.Equal(recvIPLayer.DstIP, s.srcIP) {
+			// 检查目标ip和源ip是否匹配
+			// log.Printf("packet does not match our src IP / dst IP")
+		} else if recvTCPLayer, ok := tcpl.(*layers.TCP); !ok {
+			// 基本不会发生
+			log.Printf("tcp layer is not tcp layer")
+		} else if recvTCPLayer.DstPort != SRC_PORT {
+			log.Printf("dst port %v does not match", recvTCPLayer.DstPort)
+		} else if recvTCPLayer.RST {
+			log.Printf("  port %v closed", recvTCPLayer.SrcPort)
+		} else if recvTCPLayer.SYN && recvTCPLayer.ACK {
+			log.Printf("  port %v open", recvTCPLayer.SrcPort)
+			s.openPort = append(s.openPort, recvTCPLayer.SrcPort.String())
 		} else {
 			log.Printf("ignoring useless packet")
 		}
@@ -372,7 +378,6 @@ func (s *Scanner) judgePortStatus(data []byte) {
 	//if ip4Layer.SrcIP[3] != s.dstIP[3] {
 	//	// return
 	//}
-	log.Println(tcpLayer.DstPort, tcpLayer.SrcPort, ip4Layer.DstIP, ip4Layer.SrcIP)
 	if tcpLayer.DstPort != SRC_PORT {
 		// log.Printf("\t dst port %v does not match", tcpLayer.DstPort)
 	} else if tcpLayer.RST {
