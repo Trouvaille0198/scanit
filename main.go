@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"github.com/jackpal/gateway"
@@ -30,6 +30,7 @@ type Scanner struct {
 	opts gopacket.SerializeOptions // 配置项
 	buf  gopacket.SerializeBuffer  // 待发送的序列缓冲
 
+	portNum uint32
 }
 
 // send 发送包
@@ -63,8 +64,8 @@ func getInterface() (deviceName string, mac net.HardwareAddr, gatewayIP net.IP, 
 	}
 
 	deviceName, srcIP = chooseDevice()
-	log.Println("scrIP chosen:", srcIP.String())
-	log.Println("device chosen:", deviceName)
+	//log.Println("scrIP chosen:", srcIP.String())
+	//log.Println("device chosen:", deviceName)
 
 	mac = getLocalMAC(srcIP)
 	return deviceName, mac, gatewayIP.To4(), srcIP.To4(), nil
@@ -165,6 +166,8 @@ func isInLocalNetwork(dstIP, g net.IP) bool {
 }
 
 // GetDstMAC 使用ARP协议获取目标主机的mac地址
+// 首先开一个goroutine等待响应包 接下来在函数中循环发送试探包 直到goroutine中接收到正确的mac地址才退出循环
+// 若循环超过5次 则停止等待 视为失败
 func GetDstMAC(
 	dstIP, gatewayIP, srcIP net.IP,
 	deviceName string, localMAC net.HardwareAddr) (net.HardwareAddr, error) {
@@ -265,14 +268,13 @@ func GetDstMAC(
 	return mac, nil
 }
 
-// scan 对目标ip所有端口进行扫描
-func (s *Scanner) scan() error {
-	// First off, get the MAC address we should be sending packets to.
+// getLayers 为syn包构建协议层
+func getLayers(s *Scanner) (*layers.Ethernet, *layers.IPv4, *layers.TCP) {
+	// 获取目标主机的mac地址
 	dstMAC, err := GetDstMAC(s.dstIP, s.gatewayIP, s.srcIP, s.deviceName, s.mac)
 	if err != nil {
 		log.Fatal("failed to get MAC address: ", err)
 	}
-
 	// 构建协议层
 	ethLayer := layers.Ethernet{
 		SrcMAC:       s.mac,
@@ -296,78 +298,132 @@ func (s *Scanner) scan() error {
 	if err != nil {
 		log.Fatal(err)
 	}
+	return &ethLayer, &ip4Layer, &tcpLayer
+}
 
-	// 构建ip地址流 用于确定包流向
-	start := time.Now()
-	for {
-		// 从 1 到 65535 依次发包
-		if tcpLayer.DstPort < 1000 {
-			start = time.Now()
-			tcpLayer.DstPort++
-			// log.Print(tcpLayer.DstPort)
-			if err := s.send(&ethLayer, &ip4Layer, &tcpLayer); err != nil {
-				log.Printf("fail to send to port %v: %v", tcpLayer.DstPort, err)
+// sendSYNPackets3 一种比较高级的发包写法
+func (s *Scanner) sendSYNPackets3() {
+	ethLayer, ip4Layer, tcpLayer := getLayers(s)
+	// 构造一个闭包函数 循环发送syn包直到上下文被中止
+	gen := func(ctx context.Context) <-chan int {
+		curPort := make(chan int)
+		portNum := 1
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case curPort <- portNum:
+					// 发送syn包
+					tcpLayer.DstPort = layers.TCPPort(portNum)
+					err := s.send(ethLayer, ip4Layer, tcpLayer)
+					if err != nil {
+						log.Printf("failed to send to port %v: %v", tcpLayer.DstPort, err)
+					}
+					portNum++
+				}
 			}
-		} else {
-			log.Print("finished")
-			return nil
+		}()
+		return curPort
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for curPort := range gen(ctx) {
+		if curPort == 65535 {
+			log.Printf("finished sending")
+			break
 		}
-
-		// 若与最近一次的发送间隔超过10秒 停止发送
-		if time.Since(start) > time.Second*10 {
-			// log.Printf("timed out for %v, assuming we've seen all we can", s.dstIP)
-			log.Printf("timed out for %v, assuming we've seen all we can", s.dstIP)
-			return nil
-		}
-
-		// 阻塞以读取响应包
-		packetSource := gopacket.NewPacketSource(s.handle, s.handle.LinkType())
-		packet, _ := packetSource.NextPacket()
-
-		if networkLayer := packet.NetworkLayer(); networkLayer == nil {
-			// 检查是否有网络层
-			log.Printf("packet has no network layer")
-		} else if ipl := packet.Layer(layers.LayerTypeIPv4); ipl == nil {
-			// 检查是否有ip层
-			log.Printf("packet has no IPv4 layer")
-		} else if tcpl := packet.Layer(layers.LayerTypeTCP); tcpl == nil {
-			// 检查是否有TCP层
-			log.Printf("packet has no TCP layer")
-		} else if recvIPLayer, _ := ipl.(*layers.IPv4); !bytes.Equal(recvIPLayer.SrcIP, s.dstIP) || !bytes.Equal(recvIPLayer.DstIP, s.srcIP) {
-			// 检查目标ip和源ip是否匹配
-			// log.Printf("packet does not match our src IP / dst IP")
-		} else if recvTCPLayer, ok := tcpl.(*layers.TCP); !ok {
-			// 基本不会发生
-			log.Printf("tcp layer is not tcp layer")
-		} else if recvTCPLayer.DstPort != SRC_PORT {
-			log.Printf("dst port %v does not match", recvTCPLayer.DstPort)
-		} else if recvTCPLayer.RST {
-			log.Printf("  port %v closed", recvTCPLayer.SrcPort)
-		} else if recvTCPLayer.SYN && recvTCPLayer.ACK {
-			log.Printf("  port %v open", recvTCPLayer.SrcPort)
-			s.openPort = append(s.openPort, recvTCPLayer.SrcPort.String())
-		} else {
-			log.Printf("ignoring useless packet")
-		}
-
-		//data, _, err := s.handle.ReadPacketData()
-		//if errors.Is(err, pcap.NextErrorTimeoutExpired) {
-		//	// 忽略超时错误
-		//	failPort = append(failPort, tcpLayer.DstPort)
-		//	continue
-		//} else if err != nil {
-		//	log.Printf("error when reading packet of %v: %v", tcpLayer.DstPort, err)
-		//	continue
-		//}
-		//
-		//// 解析响应包
-		//s.judgePortStatus(data)
-
 	}
 }
 
-// judgePortStatus  拆解响应包字节数据的tcp层来分析端口状态 并在s中添加活跃端口
-func (s *Scanner) judgePortStatus(data []byte) {
+// sendSYNPackets 发送syn包
+func (s *Scanner) sendSYNPackets(quit chan<- int) {
+	ethLayer, ip4Layer, tcpLayer := getLayers(s)
+	for portNum := 1; portNum <= 65535; portNum++ {
+		tcpLayer.DstPort = layers.TCPPort(portNum)
+		err := s.send(ethLayer, ip4Layer, tcpLayer)
+		if err != nil {
+			log.Printf("failed to send to port %v: %v", tcpLayer.DstPort, err)
+		}
+	}
+	log.Print("all ports are sent")
+	time.Sleep(time.Second) // 等一秒钟 保证接收端不遗漏有效响应
+	quit <- 1
+
+}
+
+// Scan 对目标ip所有端口进行扫描
+func (s *Scanner) Scan() error {
+	// 清空上次扫描记录 (if exists)
+	s.openPort = []string{}
+	quit := make(chan int)
+	// 发送syn包
+	go s.sendSYNPackets(quit)
+	// 阻塞以读取响应包
+	s.handleResponse(quit)
+
+	return nil
+}
+
+// handleResponse 处理响应包
+func (s *Scanner) handleResponse(quit <-chan int) {
+	packetSource := gopacket.NewPacketSource(s.handle, s.handle.LinkType())
+	packetChan := packetSource.Packets()
+	for {
+		select {
+		case <-quit:
+			log.Printf("seems like we find all open port of %v", s.dstIP)
+			return
+		case packet := <-packetChan:
+			s.judgePortStatus(packet)
+		}
+	}
+
+	//packetChan := packetSource.Packets()
+	//startTime := time.Now()
+	//for packet := range packetChan {
+	//	// 等待响应包 并进行处理
+	//	s.judgePortStatus(packet)
+	//	if time.Since(startTime) > time.Millisecond*1000 {
+	//		return
+	//	}
+	//	startTime = time.Now()
+	//}
+}
+
+// judgePortStatus  拆解响应包 分析端口状态 并在s中添加活跃端口
+func (s *Scanner) judgePortStatus(packet gopacket.Packet) {
+	if networkLayer := packet.NetworkLayer(); networkLayer == nil {
+		// 检查是否有网络层
+		// log.Printf("packet has no network layer")
+	} else if ipl := packet.Layer(layers.LayerTypeIPv4); ipl == nil {
+		// 检查是否有ip层
+		// log.Printf("packet has no IPv4 layer")
+	} else if tcpl := packet.Layer(layers.LayerTypeTCP); tcpl == nil {
+		// 检查是否有TCP层
+		// log.Printf("packet has no TCP layer")
+	} else if recvIPLayer, _ := ipl.(*layers.IPv4); !net.IP.Equal(recvIPLayer.SrcIP, s.dstIP) || !net.IP.Equal(recvIPLayer.DstIP, s.srcIP) {
+		// 检查目标ip和源ip是否匹配
+		// log.Printf("packet does not match our src IP / dst IP")
+	} else if recvTCPLayer, ok := tcpl.(*layers.TCP); !ok {
+		// 基本不会发生
+		// log.Printf("tcp layer is not tcp layer")
+	} else if recvTCPLayer.DstPort != SRC_PORT {
+		// log.Printf("dst port %v does not match", recvTCPLayer.DstPort)
+	} else if recvTCPLayer.RST {
+		// log.Printf("port %v closed", recvTCPLayer.SrcPort)
+	} else if recvTCPLayer.SYN && recvTCPLayer.ACK {
+		log.Printf("port %v open", recvTCPLayer.SrcPort)
+		s.openPort = append(s.openPort, recvTCPLayer.SrcPort.String())
+	} else {
+		log.Printf("ignoring useless packet")
+	}
+}
+
+// judgePortStatus2  拆解响应包字节数据的tcp层来分析端口状态 并在s中添加活跃端口
+func (s *Scanner) judgePortStatus2(data []byte) {
 	var ethLayer layers.Ethernet
 	var ip4Layer layers.IPv4
 	var tcpLayer layers.TCP
@@ -396,7 +452,8 @@ func (s *Scanner) judgePortStatus(data []byte) {
 }
 
 func main() {
-	// defer util.Run()()
+	start := time.Now()
+
 	ipArg := flag.String("i", "", "dst IP address")
 	urlArg := flag.String("u", "", "dst url")
 	flag.Parse()
@@ -434,10 +491,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("unable to create Scanner for %v: %v", ip, err)
 	}
-
-	if err := s.scan(); err != nil {
+	defer s.close()
+	// 开始扫描
+	if err := s.Scan(); err != nil {
 		log.Fatalf("unable to scan %v: %v", ip, err)
 	}
-	s.close()
+
 	log.Println(s.openPort)
+
+	log.Printf("done 1 IP address scanned in %v seconds", time.Since(start))
 }
