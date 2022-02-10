@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/21Wi-TCPHalfOpenScanner.iml" filepath="$PROJECT_DIR$/.idea/21Wi-TCPHalfOpenScanner.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/scanit.iml" filepath="$PROJECT_DIR$/.idea/scanit.iml" />
     </modules>
   </component>
 </project>
