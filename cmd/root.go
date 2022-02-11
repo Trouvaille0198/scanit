@@ -16,7 +16,7 @@ var rootCmd = &cobra.Command{
 	Use:   "scanit",
 	Short: "a simple SYN scan tool",
 	Long:  `scanit is a SYN scan tool made in golang. It can scan all ports of a certain ip address`,
-	Run:   a,
+	Run:   run,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -36,10 +36,9 @@ func init() {
 	rootCmd.Flags().StringVarP(&IPArg, "ipaddr", "i", "", "ip address to be scanned")
 	rootCmd.Flags().StringVarP(&DomainArg, "domain", "d", "", "domain name to be scanned")
 	rootCmd.Flags().StringVarP(&PortArg, "port", "p", "", "port range to be scanned")
-
 }
 
-func a(cmd *cobra.Command, args []string) {
+func run(cmd *cobra.Command, args []string) {
 	start := time.Now()
 
 	var ip net.IP

@@ -25,7 +25,9 @@ type Scanner struct {
 	opts gopacket.SerializeOptions // 配置项
 	buf  gopacket.SerializeBuffer  // 待发送的序列缓冲
 
-	openPort []string // 开放的端口
+	openPort    []string // 开放的端口
+	closePort   []string // 关闭的端口
+	filteredNum int      // 被过滤的端口数量
 }
 
 // ShowOpenPort 打印端口扫描结果
@@ -175,6 +177,7 @@ func (s *Scanner) Scan(startPort, endPort int) {
 	// 阻塞以读取响应包
 	s.handleResponse(quit)
 	log.Printf("seems like we find all open port of %v from port %d to %d", s.dstIP, startPort, endPort)
+	log.Printf("%v ports filtered (no response)", endPort-startPort-len(s.openPort)-len(s.closePort))
 }
 
 // handleResponse 处理响应包
@@ -211,7 +214,13 @@ func (s *Scanner) judgePortStatus(packet gopacket.Packet) {
 	} else if recvTCPLayer.DstPort != SRC_PORT {
 		// log.Printf("dst port %v does not match", recvTCPLayer.DstPort)
 	} else if recvTCPLayer.RST {
-		// log.Printf("port %v closed", recvTCPLayer.SrcPort)
+		log.Printf("port %v closed", recvTCPLayer.SrcPort)
+		for _, v := range s.closePort {
+			if v == recvTCPLayer.SrcPort.String() {
+				return
+			}
+		}
+		s.closePort = append(s.closePort, recvTCPLayer.SrcPort.String())
 	} else if recvTCPLayer.SYN && recvTCPLayer.ACK {
 		log.Printf("port %v open", recvTCPLayer.SrcPort)
 		for _, v := range s.openPort {
