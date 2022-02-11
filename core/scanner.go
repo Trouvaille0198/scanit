@@ -151,9 +151,9 @@ func (s *Scanner) sendSYNPackets2() {
 }
 
 // sendSYNPackets 发送syn包
-func (s *Scanner) sendSYNPackets(quit chan<- int) {
+func (s *Scanner) sendSYNPackets(quit chan<- int, startPort, endPort int) {
 	ethLayer, ip4Layer, tcpLayer := getLayers(s)
-	for portNum := 1; portNum <= 65535; portNum++ {
+	for portNum := startPort; portNum <= endPort; portNum++ {
 		tcpLayer.DstPort = layers.TCPPort(portNum)
 		err := s.send(ethLayer, ip4Layer, tcpLayer)
 		if err != nil {
@@ -161,19 +161,20 @@ func (s *Scanner) sendSYNPackets(quit chan<- int) {
 		}
 	}
 	log.Print("all ports are sent")
-	time.Sleep(time.Second) // 等一秒钟 保证接收端不遗漏有效响应
+	time.Sleep(time.Second * 2) // 等一段时间 保证接收端不遗漏有效响应
 	quit <- 1
 }
 
 // Scan 对目标ip所有端口进行扫描
-func (s *Scanner) Scan() {
+func (s *Scanner) Scan(startPort, endPort int) {
 	// 清空上次扫描记录 (if exists)
 	s.openPort = []string{}
 	quit := make(chan int)
 	// 发送syn包
-	go s.sendSYNPackets(quit)
+	go s.sendSYNPackets(quit, startPort, endPort)
 	// 阻塞以读取响应包
 	s.handleResponse(quit)
+	log.Printf("seems like we find all open port of %v from port %d to %d", s.dstIP, startPort, endPort)
 }
 
 // handleResponse 处理响应包
@@ -183,7 +184,6 @@ func (s *Scanner) handleResponse(quit <-chan int) {
 	for {
 		select {
 		case <-quit:
-			log.Printf("seems like we find all open port of %v", s.dstIP)
 			return
 		case packet := <-packetChan:
 			s.judgePortStatus(packet)
@@ -214,6 +214,11 @@ func (s *Scanner) judgePortStatus(packet gopacket.Packet) {
 		// log.Printf("port %v closed", recvTCPLayer.SrcPort)
 	} else if recvTCPLayer.SYN && recvTCPLayer.ACK {
 		log.Printf("port %v open", recvTCPLayer.SrcPort)
+		for _, v := range s.openPort {
+			if v == recvTCPLayer.SrcPort.String() {
+				return
+			}
+		}
 		s.openPort = append(s.openPort, recvTCPLayer.SrcPort.String())
 	} else {
 		log.Printf("ignoring useless packet")
@@ -289,7 +294,7 @@ func main() {
 	}
 	defer s.Close()
 	// 开始扫描
-	s.Scan()
+	s.Scan(1, 65535)
 
 	log.Println(s.openPort)
 

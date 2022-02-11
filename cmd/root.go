@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"scanit/core"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,10 +30,13 @@ func Execute() {
 
 var IPArg string
 var DomainArg string
+var PortArg string
 
 func init() {
 	rootCmd.Flags().StringVarP(&IPArg, "ipaddr", "i", "", "ip address to be scanned")
 	rootCmd.Flags().StringVarP(&DomainArg, "domain", "d", "", "domain name to be scanned")
+	rootCmd.Flags().StringVarP(&PortArg, "port", "p", "", "port range to be scanned")
+
 }
 
 func a(cmd *cobra.Command, args []string) {
@@ -69,6 +73,29 @@ func a(cmd *cobra.Command, args []string) {
 		log.Fatalf("%q is not a valid ipv4 IP address", IPArg)
 	}
 
+	// 端口范围
+	var startPort, endPort int
+	if PortArg != "" {
+		ports := strings.Split(PortArg, "-")
+		if len(ports) != 2 {
+			log.Fatalf("%q is not a valid port range", PortArg)
+		}
+		var err error
+		startPort, err = strconv.Atoi(ports[0])
+		if err != nil {
+			log.Fatalf("%q is not a valid port range", PortArg)
+		}
+		endPort, err = strconv.Atoi(ports[1])
+		if err != nil {
+			log.Fatalf("%q is not a valid port range", PortArg)
+		}
+		if startPort > endPort {
+			log.Fatalf("%q is not a valid port range", PortArg)
+		}
+	} else {
+		startPort, endPort = 1, 65535
+	}
+
 	// 创建 Scanner
 	s, err := core.NewScanner(ip)
 	if err != nil {
@@ -76,7 +103,7 @@ func a(cmd *cobra.Command, args []string) {
 	}
 	defer s.Close()
 	// 开始扫描
-	s.Scan()
+	s.Scan(startPort, endPort)
 
 	s.ShowOpenPort()
 
