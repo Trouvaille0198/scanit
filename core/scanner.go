@@ -220,7 +220,7 @@ func (s *Scanner) judgePortStatus(packet gopacket.Packet) {
 	}
 }
 
-// judgePortStatus2  拆解响应包字节数据的tcp层来分析端口状态 并在s中添加活跃端口
+// judgePortStatus2  另一种拆包方法
 func (s *Scanner) judgePortStatus2(data []byte) {
 	var ethLayer layers.Ethernet
 	var ip4Layer layers.IPv4
@@ -247,6 +247,7 @@ func (s *Scanner) judgePortStatus2(data []byte) {
 }
 
 func main() {
+	// 测试
 	start := time.Now()
 
 	ipArg := flag.String("i", "", "dst IP address")

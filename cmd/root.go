@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"scanit/core"
+	"strings"
 	"time"
 )
 
@@ -40,12 +41,15 @@ func a(cmd *cobra.Command, args []string) {
 	var ip net.IP
 	if DomainArg != "" {
 		// ipArg 和 urlArg 同时出现时 以 urlArg 为准
+		DomainArg = strings.TrimPrefix(DomainArg, "http://")
+		DomainArg = strings.TrimPrefix(DomainArg, "https://")
+
 		ips, err := net.LookupIP(DomainArg)
 		if err != nil || len(ips) == 0 {
 			if IPArg == "" {
-				log.Fatalf("%q is no a valid hostname", DomainArg)
+				log.Fatalf("%q is not a valid hostname", DomainArg)
 			} else {
-				log.Printf("%q is no a valid hostname, will use %q instead", DomainArg, IPArg)
+				log.Printf("%q is not a valid hostname, will use %q instead", DomainArg, IPArg)
 				ip = net.ParseIP(IPArg)
 			}
 		} else {
