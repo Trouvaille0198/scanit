@@ -32,7 +32,9 @@ go build
 
 ### 指令选项
 
-#### `-i [ip address]` `--ipaddr [ip address]`
+#### 指定 ip 地址
+
+`-i [ip address]` 或 `--ipaddr [ip address]`
 
 扫描指定 ip 地址中的所有端口
 
@@ -42,7 +44,9 @@ go build
 ./scanit -i 192.168.0.1
 ```
 
-#### `-d [domain name]` `domain [domain name]`
+#### 指定域名
+
+`-d [domain name]` 或 `--domain [domain name]`
 
 扫描指定域名下的所有端口
 
@@ -51,6 +55,18 @@ go build
 ```
 
 > 若同时输入 `-i` 和 `-d` 选项，程序将默认优先识别 `-d`，如果域名不合法才会尝试 `-i`
+
+#### 指定端口范围
+
+`-p [port range]` 或 `--port [port range]`
+
+扫描指定范围内的端口，默认为 1 - 65535
+
+`[port range]` 的语法格式为 `int-int`，如 `114-514`
+
+```shell
+./scanit -d github.com -p 123-6547 
+```
 
 ## 系统设计
 

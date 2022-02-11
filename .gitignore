@@ -1,4 +1,6 @@
 .idea
+# 二进制可执行文件
+./scanit
 # Binaries for programs and plugins
 *.exe
 *.exe~
