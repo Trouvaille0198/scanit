@@ -222,12 +222,12 @@ func (s *Scanner) judgePortStatus(packet gopacket.Packet) {
 		}
 		s.closePort = append(s.closePort, recvTCPLayer.SrcPort.String())
 	} else if recvTCPLayer.SYN && recvTCPLayer.ACK {
-		log.Printf("port %v open", recvTCPLayer.SrcPort)
 		for _, v := range s.openPort {
 			if v == recvTCPLayer.SrcPort.String() {
 				return
 			}
 		}
+		log.Printf("port %v open", recvTCPLayer.SrcPort)
 		s.openPort = append(s.openPort, recvTCPLayer.SrcPort.String())
 	} else {
 		log.Printf("ignoring useless packet")
